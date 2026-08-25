@@ -28,6 +28,10 @@ mcp = FastMCP(
 )
 
 
+# Sure's API paginates index endpoints with Pagy and caps per_page at 100.
+MAX_PER_PAGE = 100
+
+
 def get_api_url() -> str:
     """Get the Sure API base URL."""
     url = os.getenv("SURE_API_URL")
@@ -179,9 +183,15 @@ def get_transactions(
     account_ids: Optional[str] = None,
     category_ids: Optional[str] = None,
     search: Optional[str] = None,
+    page: int = 1,
+    fetch_all: bool = False,
 ) -> str:
     """
     Get transactions from Sure.
+
+    Results are newest-first. The API caps a page at 100, so a query matching
+    more than that is split across pages - use `page` to step through them, or
+    `fetch_all=True` to retrieve every match in one call.
 
     Args:
         limit: Number of transactions per page (default: 25, max: 100)
@@ -190,10 +200,14 @@ def get_transactions(
         account_ids: Comma-separated account IDs to filter by
         category_ids: Comma-separated category IDs to filter by
         search: Search term to filter transactions
+        page: Which page to retrieve (1-based, default: 1)
+        fetch_all: Retrieve every matching transaction across all pages
     """
     try:
         with get_client() as client:
-            params: Dict[str, Any] = {"per_page": min(limit, 100)}
+            params: Dict[str, Any] = {
+                "per_page": MAX_PER_PAGE if fetch_all else min(limit, MAX_PER_PAGE)
+            }
 
             if start_date:
                 params["start_date"] = start_date
@@ -206,15 +220,42 @@ def get_transactions(
             if search:
                 params["search"] = search
 
-            response = client.get("/api/v1/transactions", params=params)
-            data = handle_response(response)
+            transactions: List[Any] = []
+            current_page = 1 if fetch_all else max(page, 1)
 
-            # Handle paginated response
-            transactions = data.get("transactions") or data.get("data") or data
-            if isinstance(transactions, dict):
-                transactions = transactions.get("transactions", [])
+            while True:
+                params["page"] = current_page
+                response = client.get("/api/v1/transactions", params=params)
+                data = handle_response(response)
 
-            logger.info(f"✅ Retrieved {len(transactions) if isinstance(transactions, list) else 'unknown'} transactions")
+                batch = data.get("transactions") or data.get("data") or data
+                if isinstance(batch, dict):
+                    batch = batch.get("transactions", [])
+                if not isinstance(batch, list):
+                    # Unrecognised shape - return whatever came back rather than looping.
+                    return json.dumps(batch, indent=2, default=str)
+
+                transactions.extend(batch)
+
+                pagination = data.get("pagination") if isinstance(data, dict) else None
+
+                if not fetch_all:
+                    total_pages = (pagination or {}).get("total_pages", 1)
+                    if total_pages > current_page:
+                        logger.warning(
+                            f"⚠️  Page {current_page} of {total_pages} - "
+                            f"{(pagination or {}).get('total_count')} transactions match. "
+                            f"Use page=N or fetch_all=True to get the rest."
+                        )
+                    break
+
+                if not pagination:
+                    break
+                if pagination.get("page", current_page) >= pagination.get("total_pages", current_page):
+                    break
+                current_page += 1
+
+            logger.info(f"✅ Retrieved {len(transactions)} transactions")
             return json.dumps(transactions, indent=2, default=str)
     except Exception as e:
         logger.error(f"Failed to get transactions: {e}")
@@ -361,18 +402,41 @@ def delete_transaction(transaction_id: str) -> str:
 
 @mcp.tool()
 def get_categories() -> str:
-    """Get all transaction categories from Sure."""
+    """
+    Get all transaction categories from Sure.
+
+    Walks every page, so the full category list is returned rather than just
+    the API's first page of 25.
+    """
     try:
         with get_client() as client:
-            response = client.get("/api/v1/categories")
-            data = handle_response(response)
+            categories: List[Any] = []
+            page = 1
 
-            # Handle paginated response
-            categories = data.get("categories") or data.get("data") or data
-            if isinstance(categories, dict):
-                categories = categories.get("categories", [])
+            while True:
+                response = client.get(
+                    "/api/v1/categories",
+                    params={"page": page, "per_page": MAX_PER_PAGE},
+                )
+                data = handle_response(response)
 
-            logger.info(f"✅ Retrieved {len(categories) if isinstance(categories, list) else 'unknown'} categories")
+                batch = data.get("categories") or data.get("data") or data
+                if isinstance(batch, dict):
+                    batch = batch.get("categories", [])
+                if not isinstance(batch, list):
+                    # Unrecognised shape - return whatever came back rather than looping.
+                    return json.dumps(batch, indent=2, default=str)
+
+                categories.extend(batch)
+
+                pagination = data.get("pagination") if isinstance(data, dict) else None
+                if not pagination:
+                    break
+                if pagination.get("page", page) >= pagination.get("total_pages", page):
+                    break
+                page += 1
+
+            logger.info(f"✅ Retrieved {len(categories)} categories")
             return json.dumps(categories, indent=2, default=str)
     except Exception as e:
         logger.error(f"Failed to get categories: {e}")

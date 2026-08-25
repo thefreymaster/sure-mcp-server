@@ -112,12 +112,12 @@ If you'd rather run the server as a local process spawned by a single desktop cl
 | `check_auth_status` | Check authentication status | None |
 | `check_connection` | Test API connection | None |
 | `get_accounts` | Get all financial accounts | None |
-| `get_transactions` | Get transactions with filtering | `limit`, `start_date`, `end_date`, `account_ids`, `category_ids`, `search` |
+| `get_transactions` | Get transactions with filtering | `limit`, `start_date`, `end_date`, `account_ids`, `category_ids`, `search`, `page`, `fetch_all` |
 | `get_transaction` | Get single transaction | `transaction_id` |
 | `create_transaction` | Create new transaction | `account_id`, `amount`, `name`, `date`, `category_id`, `notes`, `nature` |
 | `update_transaction` | Update transaction | `transaction_id`, `amount`, `name`, `date`, `category_id`, `notes` |
 | `delete_transaction` | Delete transaction | `transaction_id` |
-| `get_categories` | Get all categories | None |
+| `get_categories` | Get all categories (walks every page) | None |
 | `get_category` | Get single category | `category_id` |
 | `create_category` | Create new category | `name`, `color`, `icon`, `parent_id` |
 | `sync_accounts` | Trigger account sync | None |
@@ -127,6 +127,25 @@ If you'd rather run the server as a local process spawned by a single desktop cl
 | `get_chat` | Get chat details | `chat_id` |
 | `send_message` | Send message to AI | `chat_id`, `content` |
 | `delete_chat` | Delete chat session | `chat_id` |
+
+### Pagination
+
+Sure paginates index endpoints with Pagy and caps `per_page` at 100.
+
+`get_categories` walks every page and returns the complete list. Previously it returned only the
+first page, so on a family with more than 25 categories the extras were silently missing.
+
+`get_transactions` accepts `page` (1-based) to step through results, or `fetch_all=True` to
+retrieve every match in one call. Results are newest-first, so a query matching more than one page
+returns the *newest* slice — when that happens the server logs a warning naming the page count and
+total, rather than silently truncating.
+
+### Not supported by the Sure API
+
+The upstream API declares `resources :categories, only: [ :index, :show, :create ]`, so there is
+**no endpoint to update or delete a category** — renaming, recolouring, reparenting or toggling
+budget exclusion has to be done in the Sure UI. Likewise `transfers` is `only: [ :index, :show ]`
+(transaction pairs can't be linked via API) and `budgets` / `budget_categories` are read-only.
 
 ## Configuration
 

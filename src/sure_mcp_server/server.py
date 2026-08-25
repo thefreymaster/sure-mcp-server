@@ -17,7 +17,15 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Initialize FastMCP server
-mcp = FastMCP("Sure MCP Server")
+# Host/port/path only matter for HTTP-based transports (sse, streamable-http);
+# they're ignored for stdio. Default host is 0.0.0.0 so the server is reachable
+# when run in a container (e.g. on Unraid) rather than bound to localhost only.
+mcp = FastMCP(
+    "Sure MCP Server",
+    host=os.getenv("MCP_HOST", "0.0.0.0"),
+    port=int(os.getenv("MCP_PORT", "8000")),
+    streamable_http_path=os.getenv("MCP_PATH", "/mcp"),
+)
 
 
 def get_api_url() -> str:
@@ -528,9 +536,22 @@ def delete_chat(chat_id: str) -> str:
 
 def main():
     """Main entry point for the server."""
-    logger.info("Starting Sure MCP Server...")
+    transport = os.getenv("MCP_TRANSPORT", "streamable-http")
+    if transport not in ("stdio", "sse", "streamable-http"):
+        raise RuntimeError(
+            f"❌ Invalid MCP_TRANSPORT '{transport}'. Must be 'stdio', 'sse', or 'streamable-http'."
+        )
+
+    if transport == "stdio":
+        logger.info("Starting Sure MCP Server (stdio transport)...")
+    else:
+        logger.info(
+            f"Starting Sure MCP Server ({transport} transport) on "
+            f"{mcp.settings.host}:{mcp.settings.port}{mcp.settings.streamable_http_path}..."
+        )
+
     try:
-        mcp.run()
+        mcp.run(transport=transport)
     except Exception as e:
         logger.error(f"Failed to run server: {str(e)}")
         raise

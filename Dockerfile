@@ -31,5 +31,17 @@ ENV SURE_API_KEY=""
 ENV SURE_TIMEOUT="30"
 ENV SURE_VERIFY_SSL="true"
 
-# Run the MCP server using stdio transport
+# MCP HTTP transport settings (Streamable HTTP - the standard for hosting
+# this server on a network, e.g. Unraid, rather than spawning it over stdio)
+ENV MCP_TRANSPORT="streamable-http"
+ENV MCP_HOST="0.0.0.0"
+ENV MCP_PORT="8000"
+ENV MCP_PATH="/mcp"
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import os,socket; socket.create_connection(('127.0.0.1', int(os.environ['MCP_PORT'])), timeout=3).close()" || exit 1
+
+# Run the MCP server over HTTP (see MCP_TRANSPORT above)
 CMD ["python", "-m", "sure_mcp_server.server"]

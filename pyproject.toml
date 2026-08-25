@@ -20,7 +20,9 @@ classifiers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "mcp[cli]>=1.0.0",
+    # Pinned below v2.0.0: that release renamed FastMCP -> MCPServer and
+    # restructured the server API. Revisit once this project migrates.
+    "mcp[cli]>=1.9.0,<2.0.0",
     "httpx>=0.27.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",

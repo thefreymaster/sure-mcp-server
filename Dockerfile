@@ -25,9 +25,9 @@ COPY src/ ./src/
 # Install the package in editable mode
 RUN uv pip install --system -e .
 
-# Environment variables (can be overridden at runtime)
-ENV SURE_API_URL=""
-ENV SURE_API_KEY=""
+# SURE_API_URL and SURE_API_KEY are required and must be supplied at
+# runtime (docker run -e / compose environment) - intentionally not
+# declared here so no placeholder value ends up baked into the image.
 ENV SURE_TIMEOUT="30"
 ENV SURE_VERIFY_SSL="true"
 

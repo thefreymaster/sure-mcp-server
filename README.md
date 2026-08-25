@@ -119,6 +119,7 @@ If you'd rather run the server as a local process spawned by a single desktop cl
 | `delete_transaction` | Delete transaction | `transaction_id` |
 | `get_categories` | Get all categories | None |
 | `get_category` | Get single category | `category_id` |
+| `create_category` | Create new category | `name`, `color`, `icon`, `parent_id` |
 | `sync_accounts` | Trigger account sync | None |
 | `get_usage` | Get API usage info | None |
 | `list_chats` | List AI chat sessions | None |

@@ -399,6 +399,46 @@ def get_category(category_id: str) -> str:
 
 
 @mcp.tool()
+def create_category(
+    name: str,
+    color: Optional[str] = None,
+    icon: Optional[str] = None,
+    parent_id: Optional[str] = None,
+) -> str:
+    """
+    Create a new transaction category in Sure.
+
+    Args:
+        name: The category name
+        color: Optional hex color, e.g. "#0d9488"
+        icon: Optional Lucide icon name, e.g. "trending-up" (Sure suggests one if omitted)
+        parent_id: Optional parent category ID to create this as a subcategory
+    """
+    try:
+        with get_client() as client:
+            payload: Dict[str, Any] = {"name": name}
+
+            if color:
+                payload["color"] = color
+            if icon:
+                payload["icon"] = icon
+            if parent_id:
+                payload["parent_id"] = parent_id
+
+            response = client.post(
+                "/api/v1/categories",
+                json={"category": payload}
+            )
+            data = handle_response(response)
+
+            logger.info(f"✅ Created category {name}")
+            return json.dumps(data, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Failed to create category: {e}")
+        return f"Error creating category: {str(e)}"
+
+
+@mcp.tool()
 def sync_accounts() -> str:
     """Trigger account sync to refresh data from financial institutions."""
     try:

@@ -84,6 +84,65 @@ def handle_response(response: httpx.Response) -> Any:
     return response.text
 
 
+def fetch_paginated(
+    client: httpx.Client,
+    path: str,
+    key: str,
+    params: Dict[str, Any],
+    page: int,
+    fetch_all: bool,
+) -> Any:
+    """
+    Walk a Pagy-paginated index endpoint.
+
+    Returns the accumulated list, or - if the response isn't the shape we expect -
+    whatever came back, so the caller can surface it rather than looping forever.
+    """
+    records: List[Any] = []
+    current_page = 1 if fetch_all else max(page, 1)
+
+    while True:
+        params["page"] = current_page
+        response = client.get(path, params=params)
+        data = handle_response(response)
+
+        if isinstance(data, dict):
+            if key in data:
+                batch = data[key]
+            elif "data" in data:
+                batch = data["data"]
+            else:
+                # Unrecognised shape - hand it back rather than reporting "no results".
+                return data
+        else:
+            batch = data
+
+        if not isinstance(batch, list):
+            return batch
+
+        records.extend(batch)
+
+        pagination = data.get("pagination") if isinstance(data, dict) else None
+
+        if not fetch_all:
+            total_pages = (pagination or {}).get("total_pages", 1)
+            if total_pages > current_page:
+                logger.warning(
+                    f"⚠️  Page {current_page} of {total_pages} - "
+                    f"{(pagination or {}).get('total_count')} {key} match. "
+                    f"Use page=N or fetch_all=True to get the rest."
+                )
+            break
+
+        if not pagination:
+            break
+        if pagination.get("page", current_page) >= pagination.get("total_pages", current_page):
+            break
+        current_page += 1
+
+    return records
+
+
 @mcp.tool()
 def setup_authentication() -> str:
     """Get instructions for setting up authentication with Sure."""
@@ -340,9 +399,19 @@ def update_transaction(
     date: Optional[str] = None,
     category_id: Optional[str] = None,
     notes: Optional[str] = None,
+    description: Optional[str] = None,
+    merchant_id: Optional[str] = None,
+    nature: Optional[str] = None,
+    tag_ids: Optional[str] = None,
 ) -> str:
     """
     Update an existing transaction in Sure.
+
+    These are every field the upstream API permits. Notably absent is `kind`, which is what
+    Sure uses to mark a transaction as a transfer (loan_payment, cc_payment, funds_movement,
+    investment_contribution) and to exclude it from budgets. `kind` is not in the API's
+    permitted params, so transfer linking and budget exclusion cannot be done from here -
+    only in the Sure UI. Recategorizing is the only lever this server has.
 
     Args:
         transaction_id: The ID of the transaction to update
@@ -351,6 +420,10 @@ def update_transaction(
         date: New transaction date in YYYY-MM-DD format
         category_id: New category ID
         notes: New notes
+        description: New description
+        merchant_id: New merchant ID
+        nature: "income" or "expense" to set the amount sign
+        tag_ids: Comma-separated tag IDs. Pass an empty string to clear all tags.
     """
     try:
         with get_client() as client:
@@ -366,6 +439,15 @@ def update_transaction(
                 payload["category_id"] = category_id
             if notes is not None:
                 payload["notes"] = notes
+            if description is not None:
+                payload["description"] = description
+            if merchant_id is not None:
+                payload["merchant_id"] = merchant_id
+            if nature is not None:
+                payload["nature"] = nature
+            if tag_ids is not None:
+                # Sure replaces the whole tag set, so "" clears it.
+                payload["tag_ids"] = [t.strip() for t in tag_ids.split(",") if t.strip()]
 
             response = client.patch(
                 f"/api/v1/transactions/{transaction_id}",
@@ -500,6 +582,131 @@ def create_category(
     except Exception as e:
         logger.error(f"Failed to create category: {e}")
         return f"Error creating category: {str(e)}"
+
+
+@mcp.tool()
+def get_transfers(limit: int = 25, page: int = 1, fetch_all: bool = False) -> str:
+    """
+    Get transfers (linked transaction pairs) from Sure.
+
+    A transfer is Sure's native link between the two sides of an internal move, which is
+    what stops the app double-counting it. Use this to audit which pairs are actually
+    linked - a transaction whose own `transfer` field is null has no link, and both of its
+    legs will render as separate flows in the Cashflow chart.
+
+    Read-only: the upstream API exposes transfers as index/show only, so pairs cannot be
+    linked or unlinked from here. That has to be done in the Sure UI.
+
+    Args:
+        limit: Number of transfers per page (default: 25, max: 100)
+        page: Which page to retrieve (1-based, default: 1)
+        fetch_all: Retrieve every transfer across all pages
+    """
+    try:
+        with get_client() as client:
+            params: Dict[str, Any] = {
+                "per_page": MAX_PER_PAGE if fetch_all else min(limit, MAX_PER_PAGE)
+            }
+            transfers = fetch_paginated(
+                client, "/api/v1/transfers", "transfers", params, page, fetch_all
+            )
+
+            count = len(transfers) if isinstance(transfers, list) else "unknown"
+            logger.info(f"✅ Retrieved {count} transfers")
+            return json.dumps(transfers, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Failed to get transfers: {e}")
+        return f"Error getting transfers: {str(e)}"
+
+
+@mcp.tool()
+def get_budgets(limit: int = 25, page: int = 1, fetch_all: bool = False) -> str:
+    """
+    Get budgets from Sure.
+
+    Read-only: the upstream API exposes budgets as index/show only.
+
+    Args:
+        limit: Number of budgets per page (default: 25, max: 100)
+        page: Which page to retrieve (1-based, default: 1)
+        fetch_all: Retrieve every budget across all pages
+    """
+    try:
+        with get_client() as client:
+            params: Dict[str, Any] = {
+                "per_page": MAX_PER_PAGE if fetch_all else min(limit, MAX_PER_PAGE)
+            }
+            budgets = fetch_paginated(
+                client, "/api/v1/budgets", "budgets", params, page, fetch_all
+            )
+
+            count = len(budgets) if isinstance(budgets, list) else "unknown"
+            logger.info(f"✅ Retrieved {count} budgets")
+            return json.dumps(budgets, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Failed to get budgets: {e}")
+        return f"Error getting budgets: {str(e)}"
+
+
+@mcp.tool()
+def get_budget_categories(
+    budget_id: Optional[str] = None,
+    category_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 25,
+    page: int = 1,
+    fetch_all: bool = False,
+) -> str:
+    """
+    Get per-category budget allocations from Sure.
+
+    Shows what is budgeted against each category. Note this does NOT report whether a
+    category is "excluded from budget" - Sure has no such attribute on a category. Budget
+    exclusion is decided per transaction by its `kind` (BUDGET_EXCLUDED_KINDS is
+    funds_movement, one_time, cc_payment), and `kind` is not exposed by the API.
+
+    Read-only: the upstream API exposes budget_categories as index/show only.
+
+    Args:
+        budget_id: Optional budget ID to filter by
+        category_id: Optional category ID to filter by
+        start_date: Optional start date in YYYY-MM-DD format
+        end_date: Optional end date in YYYY-MM-DD format
+        limit: Number per page (default: 25, max: 100)
+        page: Which page to retrieve (1-based, default: 1)
+        fetch_all: Retrieve every match across all pages
+    """
+    try:
+        with get_client() as client:
+            params: Dict[str, Any] = {
+                "per_page": MAX_PER_PAGE if fetch_all else min(limit, MAX_PER_PAGE)
+            }
+
+            if budget_id:
+                params["budget_id"] = budget_id
+            if category_id:
+                params["category_id"] = category_id
+            if start_date:
+                params["start_date"] = start_date
+            if end_date:
+                params["end_date"] = end_date
+
+            budget_categories = fetch_paginated(
+                client,
+                "/api/v1/budget_categories",
+                "budget_categories",
+                params,
+                page,
+                fetch_all,
+            )
+
+            count = len(budget_categories) if isinstance(budget_categories, list) else "unknown"
+            logger.info(f"✅ Retrieved {count} budget categories")
+            return json.dumps(budget_categories, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Failed to get budget categories: {e}")
+        return f"Error getting budget categories: {str(e)}"
 
 
 @mcp.tool()

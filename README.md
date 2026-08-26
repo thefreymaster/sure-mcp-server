@@ -115,11 +115,14 @@ If you'd rather run the server as a local process spawned by a single desktop cl
 | `get_transactions` | Get transactions with filtering | `limit`, `start_date`, `end_date`, `account_ids`, `category_ids`, `search`, `page`, `fetch_all` |
 | `get_transaction` | Get single transaction | `transaction_id` |
 | `create_transaction` | Create new transaction | `account_id`, `amount`, `name`, `date`, `category_id`, `notes`, `nature` |
-| `update_transaction` | Update transaction | `transaction_id`, `amount`, `name`, `date`, `category_id`, `notes` |
+| `update_transaction` | Update transaction | `transaction_id`, `amount`, `name`, `date`, `category_id`, `notes`, `description`, `merchant_id`, `nature`, `tag_ids` |
 | `delete_transaction` | Delete transaction | `transaction_id` |
 | `get_categories` | Get all categories (walks every page) | None |
 | `get_category` | Get single category | `category_id` |
 | `create_category` | Create new category | `name`, `color`, `icon`, `parent_id` |
+| `get_transfers` | Get linked transaction pairs (read-only) | `limit`, `page`, `fetch_all` |
+| `get_budgets` | Get budgets (read-only) | `limit`, `page`, `fetch_all` |
+| `get_budget_categories` | Get per-category budget allocations (read-only) | `budget_id`, `category_id`, `start_date`, `end_date`, `limit`, `page`, `fetch_all` |
 | `sync_accounts` | Trigger account sync | None |
 | `get_usage` | Get API usage info | None |
 | `list_chats` | List AI chat sessions | None |
@@ -142,10 +145,43 @@ total, rather than silently truncating.
 
 ### Not supported by the Sure API
 
-The upstream API declares `resources :categories, only: [ :index, :show, :create ]`, so there is
-**no endpoint to update or delete a category** — renaming, recolouring, reparenting or toggling
-budget exclusion has to be done in the Sure UI. Likewise `transfers` is `only: [ :index, :show ]`
-(transaction pairs can't be linked via API) and `budgets` / `budget_categories` are read-only.
+Verified against upstream `we-promise/sure` source. `transactions` is the **only writable
+resource**:
+
+```ruby
+resources :accounts,           only: [ :index, :show ]
+resources :budgets,            only: [ :index, :show ]
+resources :budget_categories,  only: [ :index, :show ]
+resources :categories,         only: [ :index, :show, :create ]
+resources :transactions,       only: [ :index, :show, :create, :update, :destroy ]
+resources :transfers,          only: [ :index, :show ]
+```
+
+- **No category update or delete.** `category_params` permits only `:name, :color, :icon,
+  :parent_id`. Renaming, recolouring and reparenting are UI-only.
+- **No transfer create.** Transaction pairs cannot be linked or unlinked via the API.
+- **Budgets and budget categories are read-only.**
+
+#### Transfer linking and budget exclusion are `kind`, and `kind` isn't writable
+
+Sure decides both of these from a per-transaction `kind` enum, not from the category:
+
+```ruby
+enum :kind, { standard:, funds_movement:, cc_payment:,
+              loan_payment:, one_time:, investment_contribution: }
+
+TRANSFER_KINDS        = %w[funds_movement cc_payment loan_payment investment_contribution]
+BUDGET_EXCLUDED_KINDS = %w[funds_movement one_time cc_payment]
+```
+
+`transaction_params` permits `:date, :amount, :name, :description, :notes, :currency,
+:category_id, :merchant_id, :nature, :user_modified, tag_ids: []` — **`kind` is not in that
+list**. So a transaction cannot be marked as a transfer, nor excluded from a budget, through
+any API client. There is also no `excluded` attribute on `Category` at all; "exclude this
+category from budgets" is not a thing Sure models.
+
+The practical consequence: **recategorizing is the only lever this server has** over how a
+transaction is counted.
 
 ## Configuration
 

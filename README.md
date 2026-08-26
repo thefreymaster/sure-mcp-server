@@ -1,74 +1,80 @@
 # Sure MCP Server
 
-A Model Context Protocol (MCP) server for integrating with the [Sure](https://github.com/we-promise/sure) self-hosted personal finance platform. This server provides access to your financial accounts, transactions, categories, and AI chat through Claude Desktop.
+A Model Context Protocol (MCP) server for integrating with the [Sure](https://github.com/we-promise/sure) self-hosted personal finance platform. This server provides access to your financial accounts, transactions, categories, and AI chat through any MCP-compatible client.
 
-## Quick Start
+This server speaks **Streamable HTTP** (the standard MCP transport for network-hosted servers), so it can run as a long-lived service — for example in a Docker container on an [Unraid](https://unraid.net/) server — instead of being spawned per-client over stdio.
 
-There are two ways to run the Sure MCP Server: **Docker (recommended)** or **manual installation**.
+## Quick Start (Docker / Unraid)
 
-### Option A: Docker Installation (Recommended)
+1. **Configure environment variables**. Copy `.env.example` to `.env` and fill in your Sure connection details:
 
-1. **Build the Docker image**:
    ```bash
-   docker compose build
+   cp .env.example .env
    ```
 
-2. **Configure Claude Desktop** to use Docker:
+   ```env
+   SURE_API_URL=http://your-sure-host:3000
+   SURE_API_KEY=your-api-key-here
+   SURE_VERIFY_SSL=false   # if Sure isn't behind HTTPS
+   ```
 
-   **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   `MCP_HOST`, `MCP_PORT`, and `MCP_PATH` control where the server listens (defaults: `0.0.0.0:8000/mcp`) and generally don't need to change.
 
-   **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+2. **Build and run**:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+   This starts the server listening on `http://<host>:8000/mcp`.
+
+3. **On Unraid specifically**:
+   - Easiest: install the **Compose Manager** plugin from Community Applications and point it at this repo's `docker-compose.yml`.
+   - Or add the container manually in the Docker tab: image `sure-mcp-server:latest` (build it first with `docker compose build`, or push it to a registry your Unraid box can pull from), container port `8000` mapped to a host port of your choice, and the same environment variables as above.
+   - `host.docker.internal` is mapped via `extra_hosts` in the compose file, so `SURE_API_URL=http://host.docker.internal:3000` works if Sure runs directly on the Unraid host. If Sure runs in its own container, use that container's name/IP on the Docker network instead.
+
+4. **Point your MCP client at it**. Any client that supports remote (Streamable HTTP) MCP servers just needs the URL:
 
    ```json
    {
      "mcpServers": {
        "Sure": {
-         "command": "docker",
-         "args": [
-           "run",
-           "-i",
-           "--rm",
-           "-e", "SURE_API_URL",
-           "-e", "SURE_API_KEY",
-           "-e", "SURE_VERIFY_SSL",
-           "--add-host=host.docker.internal:host-gateway",
-           "sure-mcp-server"
-         ],
-         "env": {
-           "SURE_API_URL": "http://host.docker.internal:3000",
-           "SURE_API_KEY": "your-api-key-here",
-           "SURE_VERIFY_SSL": "false"
-         }
+         "url": "http://your-unraid-ip:8000/mcp"
        }
      }
    }
    ```
 
-   **Note**: Use `host.docker.internal` to connect to Sure running on your host machine.
+   Note that with HTTP hosting, `SURE_API_URL`/`SURE_API_KEY` etc. are configured **once, on the server** (step 1) — not per-client. Every client connecting to this server shares the same Sure backend and credentials.
 
-3. **Restart Claude Desktop**
+   For clients that only support locally-spawned (stdio) servers, bridge with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote):
 
-### Option B: Manual Installation
-
-1. **Clone this repository**:
-   ```bash
-   git clone https://github.com/robcerda/sure-mcp-server.git
-   cd sure-mcp-server
+   ```json
+   {
+     "mcpServers": {
+       "Sure": {
+         "command": "npx",
+         "args": ["-y", "mcp-remote", "http://your-unraid-ip:8000/mcp"]
+       }
+     }
+   }
    ```
 
-2. **Install dependencies**:
+### A note on exposure
+
+The server has no built-in authentication of its own — anyone who can reach `http://host:8000/mcp` can use your Sure credentials through it. Keep it on your LAN/VPN, or put it behind a reverse proxy that adds auth (e.g. Authelia, Nginx with basic auth) if you need to reach it from outside your network. Don't port-forward it directly to the internet.
+
+## Alternative: stdio transport (local, single client)
+
+If you'd rather run the server as a local process spawned by a single desktop client instead of hosting it over HTTP, set `MCP_TRANSPORT=stdio` and run it directly:
+
+1. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
    pip install -e .
    ```
 
-3. **Configure Claude Desktop**:
-   Add this to your Claude Desktop configuration file:
-
-   **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-   **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-
+2. **Configure your client** (e.g. Claude Desktop's `claude_desktop_config.json`):
    ```json
    {
      "mcpServers": {
@@ -76,41 +82,27 @@ There are two ways to run the Sure MCP Server: **Docker (recommended)** or **man
          "command": "uv",
          "args": [
            "run",
-           "--with",
-           "mcp[cli]",
-           "--with-editable",
-           "/path/to/your/sure-mcp-server",
-           "mcp",
-           "run",
+           "--with", "mcp[cli]",
+           "--with-editable", "/path/to/your/sure-mcp-server",
+           "mcp", "run",
            "/path/to/your/sure-mcp-server/src/sure_mcp_server/server.py"
          ],
          "env": {
            "SURE_API_URL": "http://localhost:3000",
-           "SURE_API_KEY": "your-api-key-here"
+           "SURE_API_KEY": "your-api-key-here",
+           "MCP_TRANSPORT": "stdio"
          }
        }
      }
    }
    ```
 
-   **Important**: Replace `/path/to/your/sure-mcp-server` with your actual path!
-
-4. **Restart Claude Desktop**
-
 ### Get Your Sure API Key
 
 1. Start your Sure Docker instance: `docker compose up -d`
 2. Log into Sure at `http://localhost:3000`
 3. Go to **Settings > API Key** and generate a new key
-4. Copy the API key to your Claude Desktop config
-
-### Start Using in Claude Desktop
-
-Once configured, use these tools directly in Claude Desktop:
-- `get_accounts` - View all accounts
-- `get_transactions` - Recent transactions
-- `get_categories` - Transaction categories
-- `sync_accounts` - Trigger account sync
+4. Copy the API key into your `.env` (HTTP hosting) or client config (stdio)
 
 ## Available Tools
 
@@ -120,13 +112,17 @@ Once configured, use these tools directly in Claude Desktop:
 | `check_auth_status` | Check authentication status | None |
 | `check_connection` | Test API connection | None |
 | `get_accounts` | Get all financial accounts | None |
-| `get_transactions` | Get transactions with filtering | `limit`, `start_date`, `end_date`, `account_ids`, `category_ids`, `search` |
+| `get_transactions` | Get transactions with filtering | `limit`, `start_date`, `end_date`, `account_ids`, `category_ids`, `search`, `page`, `fetch_all` |
 | `get_transaction` | Get single transaction | `transaction_id` |
 | `create_transaction` | Create new transaction | `account_id`, `amount`, `name`, `date`, `category_id`, `notes`, `nature` |
-| `update_transaction` | Update transaction | `transaction_id`, `amount`, `name`, `date`, `category_id`, `notes` |
+| `update_transaction` | Update transaction | `transaction_id`, `amount`, `name`, `date`, `category_id`, `notes`, `description`, `merchant_id`, `nature`, `tag_ids` |
 | `delete_transaction` | Delete transaction | `transaction_id` |
-| `get_categories` | Get all categories | None |
+| `get_categories` | Get all categories (walks every page) | None |
 | `get_category` | Get single category | `category_id` |
+| `create_category` | Create new category | `name`, `color`, `icon`, `parent_id` |
+| `get_transfers` | Get linked transaction pairs (read-only) | `limit`, `page`, `fetch_all` |
+| `get_budgets` | Get budgets (read-only) | `limit`, `page`, `fetch_all` |
+| `get_budget_categories` | Get per-category budget allocations (read-only) | `budget_id`, `category_id`, `start_date`, `end_date`, `limit`, `page`, `fetch_all` |
 | `sync_accounts` | Trigger account sync | None |
 | `get_usage` | Get API usage info | None |
 | `list_chats` | List AI chat sessions | None |
@@ -135,14 +131,80 @@ Once configured, use these tools directly in Claude Desktop:
 | `send_message` | Send message to AI | `chat_id`, `content` |
 | `delete_chat` | Delete chat session | `chat_id` |
 
+### Pagination
+
+Sure paginates index endpoints with Pagy and caps `per_page` at 100.
+
+`get_categories` walks every page and returns the complete list. Previously it returned only the
+first page, so on a family with more than 25 categories the extras were silently missing.
+
+`get_transactions` accepts `page` (1-based) to step through results, or `fetch_all=True` to
+retrieve every match in one call. Results are newest-first, so a query matching more than one page
+returns the *newest* slice — when that happens the server logs a warning naming the page count and
+total, rather than silently truncating.
+
+### Not supported by the Sure API
+
+Verified against upstream `we-promise/sure` source. `transactions` is the **only writable
+resource**:
+
+```ruby
+resources :accounts,           only: [ :index, :show ]
+resources :budgets,            only: [ :index, :show ]
+resources :budget_categories,  only: [ :index, :show ]
+resources :categories,         only: [ :index, :show, :create ]
+resources :transactions,       only: [ :index, :show, :create, :update, :destroy ]
+resources :transfers,          only: [ :index, :show ]
+```
+
+- **No category update or delete.** `category_params` permits only `:name, :color, :icon,
+  :parent_id`. Renaming, recolouring and reparenting are UI-only.
+- **No transfer create.** Transaction pairs cannot be linked or unlinked via the API.
+- **Budgets and budget categories are read-only.**
+
+#### Transfer linking and budget exclusion are `kind`, and `kind` isn't writable
+
+Sure decides both of these from a per-transaction `kind` enum, not from the category:
+
+```ruby
+enum :kind, { standard:, funds_movement:, cc_payment:,
+              loan_payment:, one_time:, investment_contribution: }
+
+TRANSFER_KINDS        = %w[funds_movement cc_payment loan_payment investment_contribution]
+BUDGET_EXCLUDED_KINDS = %w[funds_movement one_time cc_payment]
+```
+
+`transaction_params` permits `:date, :amount, :name, :description, :notes, :currency,
+:category_id, :merchant_id, :nature, :user_modified, tag_ids: []` — **`kind` is not in that
+list**. So a transaction cannot be marked as a transfer, nor excluded from a budget, through
+any API client. There is also no `excluded` attribute on `Category` at all; "exclude this
+category from budgets" is not a thing Sure models.
+
+The practical consequence: **recategorizing is the only lever this server has** over how a
+transaction is counted.
+
 ## Configuration
 
+### Sure API connection
+
 | Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
+|----------|----------|---------|--------------|
 | `SURE_API_URL` | Yes | - | Base URL of your Sure instance |
-| `SURE_API_KEY` | Yes | - | API key from Sure settings |
+| `SURE_API_KEY` | Yes* | - | API key from Sure settings |
+| `SURE_ACCESS_TOKEN` | Yes* | - | Alternative to `SURE_API_KEY` (Bearer token) |
 | `SURE_TIMEOUT` | No | 30 | Request timeout in seconds |
 | `SURE_VERIFY_SSL` | No | true | Verify SSL certificates |
+
+\* One of `SURE_API_KEY` or `SURE_ACCESS_TOKEN` is required.
+
+### MCP server transport
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|--------------|
+| `MCP_TRANSPORT` | No | `streamable-http` | `streamable-http`, `sse`, or `stdio` |
+| `MCP_HOST` | No | `0.0.0.0` | Bind address (HTTP transports only) |
+| `MCP_PORT` | No | `8000` | Bind port (HTTP transports only) |
+| `MCP_PATH` | No | `/mcp` | HTTP endpoint path (HTTP transports only) |
 
 For local Docker setup, use `SURE_API_URL=http://localhost:3000` and `SURE_VERIFY_SSL=false`.
 
@@ -162,6 +224,11 @@ For local Docker setup, use `SURE_API_URL=http://localhost:3000` and `SURE_VERIF
 1. Verify your API key is correct
 2. Check the key hasn't expired
 3. Regenerate the key in Sure settings
+
+### Server not reachable over HTTP
+1. `docker compose logs sure-mcp-server` to confirm it started and check which host/port it bound to
+2. Confirm the container port is published (`docker ps`) and reachable from the client machine
+3. Make sure the client URL includes the path (default `/mcp`), e.g. `http://host:8000/mcp`
 
 ## Project Structure
 
